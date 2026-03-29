@@ -1,0 +1,25 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "app_state.c"
+        "amp_transport.c"
+        "buttons.c"
+        "leds.c"
+        "midi_config.c"
+        "web_server.c"
+        "web_ui.c"
+        "wifi_manager.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        esp_driver_gpio
+        esp_event
+        esp_http_server
+        esp_netif
+        esp_timer
+        esp_wifi
+        freertos
+        json
+        lwip
+        nvs_flash
+        bt
+)

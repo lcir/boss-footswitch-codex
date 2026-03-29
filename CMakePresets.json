@@ -1,0 +1,58 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "esp-idf-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "IDF_TARGET": "esp32",
+        "CCACHE_ENABLE": "OFF"
+      },
+      "environment": {
+        "IDF_PATH": "/Users/peny/esp/esp-idf",
+        "ESP_IDF_VERSION": "5.4",
+        "OPENOCD_SCRIPTS": "/Users/peny/.espressif/tools/openocd-esp32/v0.12.0-esp32-20250422/openocd-esp32/share/openocd/scripts",
+        "ESP_ROM_ELF_DIR": "/Users/peny/.espressif/tools/esp-rom-elfs/20241011/",
+        "PATH": "/Users/peny/esp/esp-idf/components/espcoredump:/Users/peny/esp/esp-idf/components/partition_table:/Users/peny/esp/esp-idf/components/app_update:/Users/peny/.espressif/tools/xtensa-esp-elf-gdb/14.2_20240403/xtensa-esp-elf-gdb/bin:/Users/peny/.espressif/tools/riscv32-esp-elf-gdb/14.2_20240403/riscv32-esp-elf-gdb/bin:/Users/peny/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin:/Users/peny/.espressif/tools/esp-clang/esp-18.1.2_20240912/esp-clang/bin:/Users/peny/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/bin:/Users/peny/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/bin:/Users/peny/.espressif/tools/openocd-esp32/v0.12.0-esp32-20250422/openocd-esp32/bin:/Users/peny/.espressif/python_env/idf5.4_py3.14_env/bin:/Users/peny/esp/esp-idf/tools:$penv{PATH}"
+      }
+    },
+    {
+      "name": "esp-idf-debug",
+      "displayName": "ESP-IDF Debug",
+      "inherits": "esp-idf-base",
+      "binaryDir": "${sourceDir}/cmake-build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "esp-idf-release",
+      "displayName": "ESP-IDF Release",
+      "inherits": "esp-idf-base",
+      "binaryDir": "${sourceDir}/cmake-build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "esp-idf-debug",
+      "displayName": "Build ESP-IDF Debug",
+      "configurePreset": "esp-idf-debug"
+    },
+    {
+      "name": "esp-idf-release",
+      "displayName": "Build ESP-IDF Release",
+      "configurePreset": "esp-idf-release"
+    }
+  ]
+}

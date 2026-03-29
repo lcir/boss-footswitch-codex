@@ -1,0 +1,84 @@
+#pragma once
+
+#include "driver/gpio.h"
+
+#define APP_DEVICE_NAME "katana-foot"
+#define APP_HOSTNAME "katana-foot"
+#define APP_SOFTAP_SSID "KatanaFoot-Setup"
+#define APP_SOFTAP_PASS "katanafoot"
+
+#define APP_DEBOUNCE_MS 30
+#define APP_LONG_PRESS_MS 800
+#define APP_RESET_HOLD_MS 2500
+
+#define APP_LED_COUNT 6
+#define APP_BUTTON_COUNT 6
+#define APP_HTTP_MAX_CLIENTS 4
+
+#define APP_LED_DATA_GPIO GPIO_NUM_18
+#define APP_LEVEL_SHIFTER_GPIO GPIO_NUM_19
+
+#define APP_BUTTON_PRESET_A1_GPIO GPIO_NUM_32
+#define APP_BUTTON_PRESET_A2_GPIO GPIO_NUM_33
+#define APP_BUTTON_PRESET_B1_GPIO GPIO_NUM_25
+#define APP_BUTTON_PRESET_B2_GPIO GPIO_NUM_26
+#define APP_BUTTON_SOLO_GPIO GPIO_NUM_27
+#define APP_BUTTON_MODE_GPIO GPIO_NUM_14
+
+#define APP_WIFI_CONNECT_RETRY_MAX 10
+#define APP_WIFI_CONNECT_TIMEOUT_MS 15000
+
+#define APP_MIDI_RECONNECT_MS 4000
+#define APP_STATE_BROADCAST_QUEUE_LEN 8
+
+typedef enum {
+    APP_BUTTON_PRESET_A1 = 0,
+    APP_BUTTON_PRESET_A2,
+    APP_BUTTON_PRESET_B1,
+    APP_BUTTON_PRESET_B2,
+    APP_BUTTON_SOLO,
+    APP_BUTTON_MODE,
+} app_button_id_t;
+
+typedef enum {
+    APP_PRESET_A1 = 0,
+    APP_PRESET_A2,
+    APP_PRESET_B1,
+    APP_PRESET_B2,
+} app_preset_id_t;
+
+typedef enum {
+    APP_EFFECT_BOOSTER = 0,
+    APP_EFFECT_MOD,
+    APP_EFFECT_FX,
+    APP_EFFECT_DELAY,
+    APP_EFFECT_REVERB,
+    APP_EFFECT_COUNT,
+} app_effect_id_t;
+
+typedef enum {
+    APP_FOOTSWITCH_MODE_PRESET = 0,
+    APP_FOOTSWITCH_MODE_EFFECT,
+} app_footswitch_mode_t;
+
+typedef enum {
+    APP_PC_OFFSET_UNKNOWN = 0,
+    APP_PC_OFFSET_SUBTRACT_ONE,
+    APP_PC_OFFSET_DIRECT,
+} app_pc_offset_mode_t;
+
+typedef enum {
+    APP_AMP_STATE_CONFIDENCE_NONE = 0,
+    APP_AMP_STATE_CONFIDENCE_LOW,
+    APP_AMP_STATE_CONFIDENCE_MEDIUM,
+    APP_AMP_STATE_CONFIDENCE_HIGH,
+} app_amp_state_confidence_t;
+
+typedef enum {
+    APP_RUNTIME_BOOT = 0,
+    APP_RUNTIME_WIFI_PROVISION,
+    APP_RUNTIME_BLE_CONNECTING,
+    APP_RUNTIME_PRESET,
+    APP_RUNTIME_EFFECT,
+    APP_RUNTIME_ERROR,
+} app_runtime_state_t;
