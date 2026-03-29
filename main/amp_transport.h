@@ -32,9 +32,6 @@ typedef struct {
     uint16_t midi_char_val_handle;
     uint16_t midi_cccd_handle;
     uint8_t midi_char_properties;
-    bool sysex_in_progress;
-    uint16_t sysex_len;
-    uint8_t sysex_buffer[256];
 } amp_transport_t;
 
 esp_err_t amp_transport_init(amp_transport_t *transport, const amp_transport_config_t *config);

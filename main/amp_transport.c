@@ -101,8 +101,6 @@ static void amp_transport_reset_protocol_state(amp_transport_t *transport) {
     transport->midi_char_val_handle = 0;
     transport->midi_cccd_handle = 0;
     transport->midi_char_properties = 0;
-    transport->sysex_in_progress = false;
-    transport->sysex_len = 0;
 }
 
 static int midi_data_length(uint8_t status) {
@@ -124,47 +122,6 @@ static int midi_data_length(uint8_t status) {
 static const char *effect_name(app_effect_id_t effect) {
     static const char *labels[] = { "Booster", "Mod", "FX", "Delay", "Reverb" };
     return labels[effect];
-}
-
-static void amp_transport_handle_sysex_message(
-    amp_transport_t *transport,
-    const uint8_t *data,
-    size_t len) {
-    (void) transport;
-    if (len < 2 || data[0] != 0xF0 || data[len - 1] != 0xF7) {
-        log_payload_hex("Inbound SysEx (partial/invalid): ", data, len);
-        return;
-    }
-
-    log_payload_hex("Inbound SysEx: ", data, len);
-}
-
-static void amp_transport_append_sysex_byte(amp_transport_t *transport, uint8_t byte) {
-    if (!transport->sysex_in_progress) {
-        if (byte != 0xF0) {
-            return;
-        }
-        transport->sysex_in_progress = true;
-        transport->sysex_len = 0;
-    }
-
-    if (transport->sysex_len < sizeof(transport->sysex_buffer)) {
-        transport->sysex_buffer[transport->sysex_len++] = byte;
-    } else {
-        ESP_LOGW(TAG, "Inbound SysEx exceeded buffer size; dropping current message");
-        transport->sysex_in_progress = false;
-        transport->sysex_len = 0;
-        return;
-    }
-
-    if (byte == 0xF7) {
-        amp_transport_handle_sysex_message(
-            transport,
-            transport->sysex_buffer,
-            transport->sysex_len);
-        transport->sysex_in_progress = false;
-        transport->sysex_len = 0;
-    }
 }
 
 static void amp_transport_handle_midi_message(
@@ -217,15 +174,7 @@ static void amp_transport_parse_ble_midi_packet(
     log_payload_hex("Inbound BLE-MIDI payload: ", data, len);
 
     while (i < len) {
-        if (transport->sysex_in_progress && data[i] == 0xF7) {
-            amp_transport_append_sysex_byte(transport, data[i++]);
-            continue;
-        }
-
         if ((data[i] & 0x80) == 0) {
-            if (transport->sysex_in_progress) {
-                amp_transport_append_sysex_byte(transport, data[i]);
-            }
             ++i;
             continue;
         }
@@ -239,40 +188,18 @@ static void amp_transport_parse_ble_midi_packet(
         uint8_t data1 = 0;
         uint8_t data2 = 0;
 
-        if (status == 0xF0) {
-            amp_transport_append_sysex_byte(transport, status);
-            ++i;
-            while (i < len) {
-                if (data[i] == 0xF7) {
-                    amp_transport_append_sysex_byte(transport, data[i++]);
-                    break;
-                }
-                if ((data[i] & 0x80) != 0) {
-                    if (i + 1 < len && data[i + 1] == 0xF7) {
-                        ++i;
-                        amp_transport_append_sysex_byte(transport, data[i++]);
-                    }
-                    break;
-                }
-                amp_transport_append_sysex_byte(transport, data[i++]);
-            }
-            running_status = 0;
-            continue;
-        }
-
-        if (status == 0xF7 && transport->sysex_in_progress) {
-            amp_transport_append_sysex_byte(transport, status);
-            ++i;
-            continue;
-        }
-
         if (status & 0x80) {
             ++i;
             if (status >= 0xF8) {
                 amp_transport_handle_midi_message(transport, status, 0, 0, 0);
                 continue;
             }
-            running_status = status < 0xF0 ? status : 0;
+            if (status >= 0xF0) {
+                ESP_LOGI(TAG, "Ignoring inbound non-channel MIDI status=0x%02X", status);
+                running_status = 0;
+                continue;
+            }
+            running_status = status;
         } else if (running_status != 0) {
             status = running_status;
         } else {
