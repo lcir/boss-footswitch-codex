@@ -170,6 +170,26 @@ bool midi_config_get_program_for_preset(
     return true;
 }
 
+bool midi_config_get_program_for_panel(
+    const midi_config_snapshot_t *snapshot,
+    uint8_t *out_program) {
+    if (!midi_config_is_ready(snapshot)) {
+        return false;
+    }
+
+    int wire_program = snapshot->pc_panel;
+    if (snapshot->pc_offset_mode == APP_PC_OFFSET_SUBTRACT_ONE) {
+        wire_program -= 1;
+    }
+
+    if (wire_program < 0 || wire_program > 127) {
+        return false;
+    }
+
+    *out_program = (uint8_t) wire_program;
+    return true;
+}
+
 bool midi_config_get_cc_for_effect(
     const midi_config_snapshot_t *snapshot,
     app_effect_id_t effect,

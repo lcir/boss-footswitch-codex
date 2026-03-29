@@ -40,6 +40,9 @@ bool midi_config_get_program_for_preset(
     const midi_config_snapshot_t *snapshot,
     app_preset_id_t preset,
     uint8_t *out_program);
+bool midi_config_get_program_for_panel(
+    const midi_config_snapshot_t *snapshot,
+    uint8_t *out_program);
 bool midi_config_get_cc_for_effect(
     const midi_config_snapshot_t *snapshot,
     app_effect_id_t effect,

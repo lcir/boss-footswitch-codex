@@ -90,7 +90,7 @@ static void emit_press_action(app_button_id_t button_id) {
             }
             break;
         case APP_BUTTON_SOLO:
-            action.type = APP_ACTION_SOLO_TOGGLE;
+            action.type = APP_ACTION_PANEL_SELECT;
             break;
         case APP_BUTTON_MODE:
             action.type = APP_ACTION_MODE_SET;

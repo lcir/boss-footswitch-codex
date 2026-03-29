@@ -1,5 +1,6 @@
 #include "web_server.h"
 
+#include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,14 +9,20 @@
 #include "esp_check.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_spiffs.h"
 
-#include "web_ui.h"
+#include "diag_log.h"
 #include "wifi_manager.h"
 
 static const char *TAG = "web_server";
+static const char *WEB_FS_BASE_PATH = "/spiffs";
+static const char *WEB_FS_PARTITION_LABEL = "web_assets";
+static const uint16_t WEB_SERVER_URI_HANDLER_CAPACITY = 16;
+static const size_t WEB_SERVER_STACK_SIZE = 8192;
 
 static web_server_config_t s_config;
 static httpd_handle_t s_server;
+static bool s_spiffs_ready;
 
 typedef struct {
     int fd;
@@ -67,6 +74,26 @@ static const char *amp_state_confidence_to_string(app_amp_state_confidence_t con
     return "none";
 }
 
+static cJSON *diag_entry_to_json(const diag_log_entry_t *entry) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "seq", entry->seq);
+    cJSON_AddNumberToObject(root, "uptimeMs", entry->uptime_ms);
+    cJSON_AddStringToObject(root, "level", diag_log_level_to_string(entry->level));
+    cJSON_AddStringToObject(root, "source", entry->source);
+    cJSON_AddStringToObject(root, "message", entry->message);
+    return root;
+}
+
+static cJSON *diagnostics_to_json(void) {
+    diag_log_entry_t entries[48];
+    const size_t count = diag_log_copy_recent(entries, sizeof(entries) / sizeof(entries[0]));
+    cJSON *root = cJSON_CreateArray();
+    for (size_t i = 0; i < count; ++i) {
+        cJSON_AddItemToArray(root, diag_entry_to_json(&entries[i]));
+    }
+    return root;
+}
+
 static bool parse_pc_offset_mode_string(const char *value, app_pc_offset_mode_t *out_mode) {
     if (strcmp(value, "subtract-one") == 0) {
         *out_mode = APP_PC_OFFSET_SUBTRACT_ONE;
@@ -113,10 +140,8 @@ static cJSON *snapshot_to_json(const app_state_snapshot_t *snapshot) {
     cJSON_AddStringToObject(root, "activePreset", preset_to_string(snapshot->active_preset));
     cJSON_AddStringToObject(root, "pcOffsetMode", pc_offset_mode_to_string(snapshot->pc_offset_mode));
     cJSON_AddStringToObject(root, "ampStateConfidence", amp_state_confidence_to_string(snapshot->amp_state_confidence));
-    cJSON_AddBoolToObject(root, "soloEnabled", snapshot->solo_enabled);
     cJSON_AddBoolToObject(root, "synced", snapshot->synced);
     cJSON_AddBoolToObject(root, "midiConfigured", snapshot->midi_configured);
-    cJSON_AddBoolToObject(root, "soloConfigured", snapshot->solo_configured);
     cJSON_AddBoolToObject(root, "wifiProvisioned", snapshot->wifi_provisioned);
     cJSON_AddStringToObject(root, "wifiSsid", snapshot->wifi.ssid);
     cJSON_AddStringToObject(root, "wifiIp", snapshot->wifi.ip);
@@ -167,9 +192,69 @@ static esp_err_t send_state_response(httpd_req_t *req, const app_state_snapshot_
     return send_json_object(req, snapshot_to_json(snapshot));
 }
 
+static esp_err_t web_fs_mount(void) {
+    if (s_spiffs_ready) {
+        return ESP_OK;
+    }
+
+    const esp_vfs_spiffs_conf_t conf = {
+        .base_path = WEB_FS_BASE_PATH,
+        .partition_label = WEB_FS_PARTITION_LABEL,
+        .max_files = 6,
+        .format_if_mount_failed = false,
+    };
+
+    ESP_RETURN_ON_ERROR(esp_vfs_spiffs_register(&conf), TAG, "mount spiffs");
+
+    size_t total = 0;
+    size_t used = 0;
+    if (esp_spiffs_info(WEB_FS_PARTITION_LABEL, &total, &used) == ESP_OK) {
+        ESP_LOGI(TAG, "Mounted web assets SPIFFS total=%u used=%u", (unsigned) total, (unsigned) used);
+        DIAG_LOGI("web", "Mounted web assets FS used=%u of %u bytes", (unsigned) used, (unsigned) total);
+    } else {
+        DIAG_LOGW("web", "Mounted web assets FS, but usage info is unavailable");
+    }
+
+    s_spiffs_ready = true;
+    return ESP_OK;
+}
+
+static esp_err_t send_web_asset(httpd_req_t *req, const char *asset_path, const char *content_type) {
+    char full_path[96];
+    snprintf(full_path, sizeof(full_path), "%s/%s", WEB_FS_BASE_PATH, asset_path);
+
+    FILE *file = fopen(full_path, "rb");
+    if (file == NULL) {
+        ESP_LOGE(TAG, "Web asset not found: %s", full_path);
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Asset not found");
+    }
+
+    httpd_resp_set_type(req, content_type);
+
+    char buffer[1024];
+    size_t read = 0;
+    while ((read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        esp_err_t err = httpd_resp_send_chunk(req, buffer, read);
+        if (err != ESP_OK) {
+            fclose(file);
+            return err;
+        }
+    }
+
+    fclose(file);
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 static esp_err_t index_get_handler(httpd_req_t *req) {
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_sendstr(req, web_ui_index_html());
+    return send_web_asset(req, "index.html", "text/html; charset=utf-8");
+}
+
+static esp_err_t app_js_get_handler(httpd_req_t *req) {
+    return send_web_asset(req, "app.js", "application/javascript; charset=utf-8");
+}
+
+static esp_err_t style_css_get_handler(httpd_req_t *req) {
+    return send_web_asset(req, "style.css", "text/css; charset=utf-8");
 }
 
 static esp_err_t redirect_to_root_handler(httpd_req_t *req) {
@@ -182,6 +267,10 @@ static esp_err_t state_get_handler(httpd_req_t *req) {
     app_state_snapshot_t snapshot;
     app_state_get(s_config.state, &snapshot);
     return send_state_response(req, &snapshot);
+}
+
+static esp_err_t diagnostics_get_handler(httpd_req_t *req) {
+    return send_json_object(req, diagnostics_to_json());
 }
 
 static esp_err_t midi_config_get_handler(httpd_req_t *req) {
@@ -202,8 +291,8 @@ static bool parse_action_json(cJSON *root, app_action_t *action) {
         return cJSON_IsString(preset) && parse_preset_string(preset->valuestring, &action->value.preset);
     }
 
-    if (strcmp(action_name->valuestring, "solo.toggle") == 0) {
-        action->type = APP_ACTION_SOLO_TOGGLE;
+    if (strcmp(action_name->valuestring, "panel.select") == 0) {
+        action->type = APP_ACTION_PANEL_SELECT;
         return true;
     }
 
@@ -290,12 +379,15 @@ static esp_err_t provision_post_handler(httpd_req_t *req) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing credentials");
     }
 
+    char ssid_copy[33];
+    strlcpy(ssid_copy, ssid->valuestring, sizeof(ssid_copy));
     esp_err_t err = wifi_manager_save_credentials(ssid->valuestring, password->valuestring);
     cJSON_Delete(root);
     if (err != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Provisioning failed");
     }
 
+    DIAG_LOGI("web", "Accepted WiFi credentials for '%s' from the web UI", ssid_copy);
     return httpd_resp_sendstr(req, "saved");
 }
 
@@ -370,6 +462,12 @@ static esp_err_t midi_config_post_handler(httpd_req_t *req) {
         midi_config_is_ready(&midi_config),
         midi_config.solo_configured,
         midi_config.pc_offset_mode);
+    DIAG_LOGI(
+        "web",
+        "Saved MIDI mapping; ready=%s solo=%s offset=%s",
+        midi_config_is_ready(&midi_config) ? "yes" : "no",
+        midi_config.solo_configured ? "yes" : "no",
+        pc_offset_mode_to_string(midi_config.pc_offset_mode));
 
     return send_json_object(req, midi_config_to_json(&midi_config));
 }
@@ -419,6 +517,7 @@ static esp_err_t midi_calibrate_post_handler(httpd_req_t *req) {
             midi_config_is_ready(&midi_config),
             midi_config.solo_configured,
             midi_config.pc_offset_mode);
+        DIAG_LOGI("web", "Stored PC offset calibration as %s", pc_offset_mode_to_string(candidate_mode));
         return send_json_object(req, midi_config_to_json(&midi_config));
     }
 
@@ -432,6 +531,7 @@ static esp_err_t midi_calibrate_post_handler(httpd_req_t *req) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Calibration test failed");
     }
 
+    DIAG_LOGI("web", "Sent PC offset calibration test using %s", pc_offset_mode_to_string(candidate_mode));
     httpd_resp_set_status(req, "202 Accepted");
     return httpd_resp_sendstr(req, "test-sent");
 }
@@ -439,6 +539,7 @@ static esp_err_t midi_calibrate_post_handler(httpd_req_t *req) {
 static esp_err_t ws_get_handler(httpd_req_t *req) {
     if (req->method == HTTP_GET) {
         ESP_LOGI(TAG, "WebSocket client connected fd=%d", httpd_req_to_sockfd(req));
+        DIAG_LOGI("web", "WebSocket client connected");
         return ESP_OK;
     }
     return ESP_OK;
@@ -456,9 +557,68 @@ static void ws_async_send(void *arg) {
     free(job);
 }
 
+static esp_err_t broadcast_ws_payload(const char *payload) {
+    if (s_server == NULL || payload == NULL) {
+        return ESP_OK;
+    }
+
+    size_t clients = APP_HTTP_MAX_CLIENTS;
+    int client_fds[APP_HTTP_MAX_CLIENTS] = {0};
+    if (httpd_get_client_list(s_server, &clients, client_fds) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    for (size_t i = 0; i < clients; ++i) {
+        if (httpd_ws_get_fd_info(s_server, client_fds[i]) != HTTPD_WS_CLIENT_WEBSOCKET) {
+            continue;
+        }
+
+        ws_send_job_t *job = calloc(1, sizeof(*job));
+        if (job == NULL) {
+            continue;
+        }
+        job->fd = client_fds[i];
+        job->payload = strdup(payload);
+        if (job->payload == NULL) {
+            free(job);
+            continue;
+        }
+
+        if (httpd_queue_work(s_server, ws_async_send, job) != ESP_OK) {
+            free(job->payload);
+            free(job);
+        }
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t web_server_broadcast_diag_entry(const diag_log_entry_t *entry) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "diag");
+    cJSON_AddItemToObject(root, "entry", diag_entry_to_json(entry));
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (payload == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    const esp_err_t err = broadcast_ws_payload(payload);
+    cJSON_free(payload);
+    return err;
+}
+
+static void on_diag_log_entry(const diag_log_entry_t *entry, void *user_ctx) {
+    (void) user_ctx;
+    web_server_broadcast_diag_entry(entry);
+}
+
 esp_err_t web_server_init(const web_server_config_t *config) {
     memset(&s_config, 0, sizeof(s_config));
     s_config = *config;
+    ESP_RETURN_ON_ERROR(web_fs_mount(), TAG, "mount web assets");
+    diag_log_set_listener(on_diag_log_entry, NULL);
     return ESP_OK;
 }
 
@@ -469,6 +629,8 @@ esp_err_t web_server_start(void) {
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_open_sockets = APP_HTTP_MAX_CLIENTS;
+    cfg.max_uri_handlers = WEB_SERVER_URI_HANDLER_CAPACITY;
+    cfg.stack_size = WEB_SERVER_STACK_SIZE;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "start server");
 
@@ -477,10 +639,25 @@ esp_err_t web_server_start(void) {
         .method = HTTP_GET,
         .handler = index_get_handler,
     };
+    httpd_uri_t app_js_uri = {
+        .uri = "/app.js",
+        .method = HTTP_GET,
+        .handler = app_js_get_handler,
+    };
+    httpd_uri_t style_css_uri = {
+        .uri = "/style.css",
+        .method = HTTP_GET,
+        .handler = style_css_get_handler,
+    };
     httpd_uri_t state_uri = {
         .uri = "/api/state",
         .method = HTTP_GET,
         .handler = state_get_handler,
+    };
+    httpd_uri_t diagnostics_uri = {
+        .uri = "/api/diagnostics",
+        .method = HTTP_GET,
+        .handler = diagnostics_get_handler,
     };
     httpd_uri_t action_uri = {
         .uri = "/api/action",
@@ -529,18 +706,22 @@ esp_err_t web_server_start(void) {
         .handler = redirect_to_root_handler,
     };
 
-    httpd_register_uri_handler(s_server, &index_uri);
-    httpd_register_uri_handler(s_server, &state_uri);
-    httpd_register_uri_handler(s_server, &action_uri);
-    httpd_register_uri_handler(s_server, &provision_uri);
-    httpd_register_uri_handler(s_server, &midi_config_get_uri);
-    httpd_register_uri_handler(s_server, &midi_config_post_uri);
-    httpd_register_uri_handler(s_server, &midi_calibrate_uri);
-    httpd_register_uri_handler(s_server, &ws_uri);
-    httpd_register_uri_handler(s_server, &captive_android);
-    httpd_register_uri_handler(s_server, &captive_apple);
-    httpd_register_uri_handler(s_server, &captive_windows);
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &index_uri), TAG, "register /");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &app_js_uri), TAG, "register /app.js");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &style_css_uri), TAG, "register /style.css");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &state_uri), TAG, "register /api/state");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &diagnostics_uri), TAG, "register /api/diagnostics");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &action_uri), TAG, "register /api/action");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &provision_uri), TAG, "register /api/provision");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &midi_config_get_uri), TAG, "register /api/midi-config GET");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &midi_config_post_uri), TAG, "register /api/midi-config POST");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &midi_calibrate_uri), TAG, "register /api/midi-calibrate");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &ws_uri), TAG, "register /ws");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &captive_android), TAG, "register /generate_204");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &captive_apple), TAG, "register /hotspot-detect.html");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &captive_windows), TAG, "register /connecttest.txt");
     ESP_LOGI(TAG, "HTTP server started");
+    DIAG_LOGI("web", "HTTP server started");
     return ESP_OK;
 }
 
@@ -556,36 +737,7 @@ esp_err_t web_server_broadcast_state(const app_state_snapshot_t *snapshot) {
         return ESP_ERR_NO_MEM;
     }
     cJSON_Delete(root);
-
-    size_t clients = 0;
-    int client_fds[APP_HTTP_MAX_CLIENTS] = {0};
-    if (httpd_get_client_list(s_server, &clients, client_fds) != ESP_OK) {
-        free(payload);
-        return ESP_FAIL;
-    }
-
-    for (size_t i = 0; i < clients; ++i) {
-        if (httpd_ws_get_fd_info(s_server, client_fds[i]) != HTTPD_WS_CLIENT_WEBSOCKET) {
-            continue;
-        }
-
-        ws_send_job_t *job = calloc(1, sizeof(*job));
-        if (job == NULL) {
-            continue;
-        }
-        job->fd = client_fds[i];
-        job->payload = strdup(payload);
-        if (job->payload == NULL) {
-            free(job);
-            continue;
-        }
-
-        if (httpd_queue_work(s_server, ws_async_send, job) != ESP_OK) {
-            free(job->payload);
-            free(job);
-        }
-    }
-
-    free(payload);
-    return ESP_OK;
+    const esp_err_t err = broadcast_ws_payload(payload);
+    cJSON_free(payload);
+    return err;
 }

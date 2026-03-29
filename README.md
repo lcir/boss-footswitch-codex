@@ -9,7 +9,7 @@ ESP-IDF firmware for a DIY `Boss Katana-50 Gen 3` footswitch that talks to the a
 - BLE transport for `Katana-50 Gen 3` over standard `BLE-MIDI`
 - Persistent `Gen 3` MIDI mapping in `NVS` with web-based calibration
 - WiFi provisioning flow with SoftAP bootstrap and stored credentials in `NVS`
-- HTTP API, WebSocket state broadcast and embedded mobile-first web interface
+- HTTP API, WebSocket state broadcast and mobile-first web interface served from SPIFFS
 - LED state renderer and hardware pin map for six RGB indicators
 
 ## Current status
@@ -38,8 +38,8 @@ The runtime no longer sends any `Gen 2/MKII`-style state query traffic. That is 
 - `main/buttons.*`: GPIO scanning, debounce, long-press and WiFi reset combo
 - `main/midi_config.*`: NVS-backed `Gen 3` PC/CC mapping and calibration state
 - `main/wifi_manager.*`: NVS-backed credentials and AP/STA switching
-- `main/web_server.*`: REST API, MIDI config endpoints, provisioning endpoint and WebSocket broadcast
-- `main/web_ui.*`: embedded HTML/CSS/JS for the virtual footswitch
+- `main/web_server.*`: REST API, MIDI config endpoints, provisioning endpoint, SPIFFS asset serving and WebSocket broadcast
+- `data/`: static `index.html`, `style.css` and `app.js` flashed into the `web_assets` SPIFFS partition
 - `main/amp_transport.*`: `Gen 3` BLE-MIDI transport and outbound `PC/CC` writes
 - `docs/hardware.md`: wiring and pin assumptions
 - `docs/protocol-capture.md`: `Gen 3` MIDI mapping notes and future feedback investigation
@@ -78,6 +78,8 @@ idf.py build
 idf.py flash monitor
 ```
 
+The top-level CMake now builds a SPIFFS image from `data/` and `idf.py flash` writes it together with the firmware.
+
 ## ESP-IDF prerequisites
 
 This project was verified against a local ESP-IDF checkout in `~/esp/esp-idf`.
@@ -96,7 +98,9 @@ Notes:
 - `install.sh esp32` is needed at least once to create the Python environment under `~/.espressif/python_env/...` and install required Python packages such as `click`.
 - `source ~/esp/esp-idf/export.sh` must be run in each new shell before calling `idf.py`.
 - The project requires `CONFIG_HTTPD_WS_SUPPORT=y` because the web UI uses WebSockets through `esp_http_server`.
-- The current build assumes a `4MB` ESP32 module and uses the `single_app_large` partition layout.
+- The current build assumes a `4MB` ESP32 module and uses a custom partition table with:
+  - `factory` app at `0x10000` sized `0x180000`
+  - `web_assets` SPIFFS partition at `0x190000` sized `0x270000`
 - If you need to regenerate `sdkconfig` from defaults, remove `sdkconfig` and rerun `idf.py build`.
 
 Verified output:

@@ -136,8 +136,9 @@ void app_state_apply_optimistic_action(app_state_store_t *store, const app_actio
             store->snapshot.runtime_state = APP_RUNTIME_PRESET;
             store->snapshot.amp_state_confidence = APP_AMP_STATE_CONFIDENCE_LOW;
             break;
-        case APP_ACTION_SOLO_TOGGLE:
-            store->snapshot.solo_enabled = !store->snapshot.solo_enabled;
+        case APP_ACTION_PANEL_SELECT:
+            store->snapshot.footswitch_mode = APP_FOOTSWITCH_MODE_PRESET;
+            store->snapshot.runtime_state = APP_RUNTIME_PRESET;
             store->snapshot.amp_state_confidence = APP_AMP_STATE_CONFIDENCE_LOW;
             break;
         case APP_ACTION_MODE_SET:

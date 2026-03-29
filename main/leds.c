@@ -81,8 +81,10 @@ esp_err_t leds_render_state(const app_state_snapshot_t *snapshot) {
         pixels[3] = effect_color(snapshot->effects[APP_EFFECT_DELAY]);
     }
 
-    pixels[4] = snapshot->solo_enabled
-        ? (leds_rgb_t){ .red = 255, .green = 0, .blue = 0 }
+    pixels[4] = snapshot->midi_configured
+        ? (snapshot->footswitch_mode == APP_FOOTSWITCH_MODE_PRESET
+            ? (leds_rgb_t){ .red = 0, .green = 96, .blue = 140 }
+            : (leds_rgb_t){ .red = 0, .green = 28, .blue = 40 })
         : (leds_rgb_t){ .red = 40, .green = 0, .blue = 0 };
     pixels[5] = transport_color(snapshot);
 

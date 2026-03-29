@@ -12,6 +12,7 @@
 #include "app_config.h"
 #include "app_state.h"
 #include "buttons.h"
+#include "diag_log.h"
 #include "leds.h"
 #include "midi_config.h"
 #include "web_server.h"
@@ -29,13 +30,38 @@ typedef struct {
 
 static app_context_t s_app;
 
+static const char *action_type_to_string(app_action_type_t type) {
+    switch (type) {
+        case APP_ACTION_PRESET_SELECT:
+            return "preset.select";
+        case APP_ACTION_PANEL_SELECT:
+            return "panel.select";
+        case APP_ACTION_MODE_SET:
+            return "mode.set";
+        case APP_ACTION_EFFECT_TOGGLE:
+            return "effect.toggle";
+        case APP_ACTION_BLE_RECONNECT:
+            return "ble.reconnect";
+        case APP_ACTION_WIFI_RESET:
+            return "wifi.reset";
+        case APP_ACTION_RESYNC:
+            return "resync";
+    }
+
+    return "unknown";
+}
+
 static void queue_action(const app_action_t *action, void *user_ctx) {
     app_context_t *app = user_ctx;
-    xQueueSend(app->action_queue, action, 0);
+    if (xQueueSend(app->action_queue, action, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "Dropping action %s because the queue is full", action_type_to_string(action->type));
+        DIAG_LOGW("action", "Dropped %s because the queue is full", action_type_to_string(action->type));
+    }
 }
 
 static void on_wifi_ready(void *user_ctx) {
     app_context_t *app = user_ctx;
+    DIAG_LOGI("wifi", "WiFi ready; starting BLE connect path");
     web_server_start();
     amp_transport_connect(&app->amp);
 }
@@ -55,12 +81,18 @@ static void render_outputs_if_needed(app_context_t *app) {
 
 static void process_action(app_context_t *app, const app_action_t *action) {
     ESP_LOGI(TAG, "Processing action %d", action->type);
+    DIAG_LOGI("action", "Processing %s", action_type_to_string(action->type));
     const esp_err_t dispatch_err = amp_transport_dispatch_action(&app->amp, action);
     if (dispatch_err == ESP_OK && amp_transport_should_apply_optimistic_action(&app->amp, action)) {
         app_state_apply_optimistic_action(&app->state, action);
+    } else if (dispatch_err == ESP_ERR_INVALID_STATE) {
+        DIAG_LOGW("action", "%s skipped because transport or config is not ready", action_type_to_string(action->type));
+    } else if (dispatch_err != ESP_OK) {
+        DIAG_LOGE("action", "%s failed with err=0x%04X", action_type_to_string(action->type), dispatch_err);
     }
 
     if (action->type == APP_ACTION_WIFI_RESET) {
+        DIAG_LOGW("wifi", "Resetting stored WiFi credentials");
         wifi_manager_reset_credentials();
         return;
     }
@@ -87,6 +119,8 @@ void app_main(void) {
     ESP_ERROR_CHECK(err);
 
     memset(&s_app, 0, sizeof(s_app));
+    ESP_ERROR_CHECK(diag_log_init());
+    DIAG_LOGI("system", "Booting %s", APP_DEVICE_NAME);
     app_state_init(&s_app.state);
     s_app.action_queue = xQueueCreate(APP_STATE_BROADCAST_QUEUE_LEN, sizeof(app_action_t));
 
@@ -97,6 +131,12 @@ void app_main(void) {
         &s_app.state,
         midi_config_is_ready(&midi_snapshot),
         midi_snapshot.solo_configured,
+        midi_snapshot.pc_offset_mode);
+    DIAG_LOGI(
+        "midi",
+        "Loaded MIDI config ready=%s solo=%s offset=%d",
+        midi_config_is_ready(&midi_snapshot) ? "yes" : "no",
+        midi_snapshot.solo_configured ? "yes" : "no",
         midi_snapshot.pc_offset_mode);
 
     ESP_ERROR_CHECK(leds_init());
@@ -121,13 +161,16 @@ void app_main(void) {
         .callback = queue_action,
         .user_ctx = &s_app,
     }));
+    DIAG_LOGI("system", "Core services initialized");
 
     xTaskCreate(controller_task, "controller", 6144, &s_app, 5, NULL);
 
     if (wifi_manager_is_provisioned()) {
         app_state_set_runtime(&s_app.state, APP_RUNTIME_BLE_CONNECTING);
+        DIAG_LOGI("wifi", "Stored WiFi credentials found");
     } else {
         app_state_set_runtime(&s_app.state, APP_RUNTIME_WIFI_PROVISION);
+        DIAG_LOGW("wifi", "No WiFi credentials found; starting in provisioning mode");
     }
 
     ESP_ERROR_CHECK(web_server_start());

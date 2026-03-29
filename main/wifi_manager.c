@@ -14,6 +14,7 @@
 #include "nvs_flash.h"
 
 #include "app_config.h"
+#include "diag_log.h"
 
 static const char *TAG = "wifi_manager";
 static const char *NVS_NS = "wifi";
@@ -61,6 +62,7 @@ static esp_err_t start_softap(void) {
     app_state_set_provisioned(s_config.state, false, true);
     memset(&s_ssid, 0, sizeof(s_ssid));
     ESP_LOGI(TAG, "Started provisioning SoftAP '%s'", APP_SOFTAP_SSID);
+    DIAG_LOGW("wifi", "Started provisioning AP '%s'", APP_SOFTAP_SSID);
     return ESP_OK;
 }
 
@@ -81,6 +83,7 @@ static esp_err_t start_station(void) {
     app_state_set_wifi_mode(s_config.state, APP_WIFI_CONNECTING);
     app_state_set_provisioned(s_config.state, true, false);
     ESP_LOGI(TAG, "Connecting to WiFi SSID '%s'", s_ssid);
+    DIAG_LOGI("wifi", "Connecting to SSID '%s'", s_ssid);
     return ESP_OK;
 }
 
@@ -99,6 +102,7 @@ static void handle_got_ip(void) {
 
     app_state_set_wifi_snapshot(s_config.state, &snapshot);
     app_state_set_wifi_mode(s_config.state, APP_WIFI_CONNECTED);
+    DIAG_LOGI("wifi", "Connected to '%s' with IP %s", snapshot.ssid, snapshot.ip[0] != '\0' ? snapshot.ip : "unknown");
     if (s_config.on_wifi_ready != NULL) {
         s_config.on_wifi_ready(s_config.user_ctx);
     }
@@ -110,6 +114,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         app_state_set_wifi_mode(s_config.state, APP_WIFI_CONNECTING);
+        DIAG_LOGW("wifi", "WiFi disconnected; retrying '%s'", s_ssid[0] != '\0' ? s_ssid : "unknown");
         esp_wifi_connect();
         return;
     }
@@ -135,6 +140,7 @@ esp_err_t wifi_manager_init(const wifi_manager_config_t *config) {
 
     s_provisioned = load_credentials() == ESP_OK && s_ssid[0] != '\0';
     app_state_set_provisioned(s_config.state, s_provisioned, !s_provisioned);
+    DIAG_LOGI("wifi", "WiFi manager initialized; provisioned=%s", s_provisioned ? "yes" : "no");
     return ESP_OK;
 }
 
@@ -159,6 +165,7 @@ esp_err_t wifi_manager_save_credentials(const char *ssid, const char *password) 
     s_provisioned = true;
     app_state_set_provisioned(s_config.state, true, false);
     ESP_LOGI(TAG, "Stored WiFi credentials for '%s'", s_ssid);
+    DIAG_LOGI("wifi", "Stored credentials for '%s'", s_ssid);
     esp_wifi_stop();
     return start_station();
 }
@@ -177,6 +184,7 @@ esp_err_t wifi_manager_reset_credentials(void) {
     memset(s_pass, 0, sizeof(s_pass));
     s_provisioned = false;
     app_state_set_provisioned(s_config.state, false, true);
+    DIAG_LOGW("wifi", "Cleared stored WiFi credentials");
     esp_wifi_stop();
     return start_softap();
 }

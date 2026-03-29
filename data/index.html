@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Katana Foot</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <h1>Katana Foot</h1>
+    <p>Gen 3 BLE-MIDI footswitch with configurable PC/CC mapping.</p>
+
+    <section class="status section">
+      <div class="card"><div class="metric">Mode</div><div class="value" id="modeValue">preset</div></div>
+      <div class="card"><div class="metric">BLE / WiFi</div><div class="value" id="linkValue">connecting</div></div>
+      <div class="card"><div class="metric">Preset</div><div class="value" id="presetValue">A1</div></div>
+      <div class="card"><div class="metric">Confidence</div><div class="value" id="confidenceValue">none</div></div>
+    </section>
+
+    <section class="section">
+      <div class="row">
+        <span class="pill"><strong>MIDI</strong> <span id="midiConfiguredBadge">not calibrated</span></span>
+        <span class="pill"><strong>Panel</strong> <span id="panelProgramBadge">PC 5</span></span>
+        <span class="pill"><strong>Offset</strong> <span id="offsetBadge">unknown</span></span>
+      </div>
+    </section>
+
+    <section class="grid section" id="footswitchGrid"></section>
+
+    <section class="utility section">
+      <button id="panelButton" class="solo" type="button">Panel</button>
+      <button id="modeButton" type="button">Toggle Mode</button>
+      <button id="reverbButton" class="fx" type="button">Reverb</button>
+      <button id="reconnectButton" class="secondary" type="button">Reconnect BLE</button>
+      <button id="resyncButton" class="secondary" type="button">Resync</button>
+      <button id="wifiResetButton" class="warn" type="button">Reset WiFi</button>
+    </section>
+
+    <section class="section">
+      <div class="card">
+        <h2>Runtime Diagnostics</h2>
+        <p>Recent BLE, WiFi and action events streamed from the device.</p>
+        <div class="diag-list" id="diagList"><div class="diag-empty">Loading diagnostics...</div></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <form id="midiConfigForm">
+        <h2>Gen 3 MIDI Setup</h2>
+        <p>Use BTS-visible numbering here. Offset calibration decides whether visible PC 1 is sent on the wire as 0 or 1.</p>
+        <div class="mapping-grid">
+          <label>PC Panel<input id="pcPanel" type="number" min="0" max="127"></label>
+          <label>PC Offset<select id="pcOffsetMode"><option value="unknown">Unknown</option><option value="subtract-one">BTS 1 => wire 0</option><option value="direct">BTS 1 => wire 1</option></select></label>
+          <label>PC A1<input id="pcA1" type="number" min="0" max="127"></label>
+          <label>PC A2<input id="pcA2" type="number" min="0" max="127"></label>
+          <label>PC B1<input id="pcB1" type="number" min="0" max="127"></label>
+          <label>PC B2<input id="pcB2" type="number" min="0" max="127"></label>
+          <label>CC Booster<input id="ccBooster" type="number" min="0" max="127"></label>
+          <label>CC Mod<input id="ccMod" type="number" min="0" max="127"></label>
+          <label>CC FX<input id="ccFx" type="number" min="0" max="127"></label>
+          <label>CC Delay<input id="ccDelay" type="number" min="0" max="127"></label>
+          <label>CC Reverb<input id="ccReverb" type="number" min="0" max="127"></label>
+          <label>CC Send/Return<input id="ccSendReturn" type="number" min="0" max="127"></label>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <button type="submit">Save MIDI Mapping</button>
+          <button id="testSubtractOne" class="secondary" type="button">Test A1 as BTS-1 => wire 0</button>
+          <button id="testDirect" class="secondary" type="button">Test A1 as BTS-1 => wire 1</button>
+        </div>
+        <div class="hint" id="midiConfigHint">Preset switching stays disabled until the PC offset is calibrated.</div>
+      </form>
+    </section>
+
+    <section class="section">
+      <form id="wifiForm">
+        <h2>WiFi Provisioning</h2>
+        <p>Shown on first boot or after WiFi reset.</p>
+        <div class="mapping-grid">
+          <label>SSID<input id="ssid" name="ssid" autocomplete="username"></label>
+          <label>Password<input id="password" name="password" type="password" autocomplete="current-password"></label>
+        </div>
+        <div class="row" style="margin-top:14px"><button type="submit">Save WiFi</button></div>
+      </form>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

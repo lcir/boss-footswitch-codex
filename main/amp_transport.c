@@ -20,6 +20,8 @@
 #include "services/gap/ble_svc_gap.h"
 #include "store/config/ble_store_config.h"
 
+#include "diag_log.h"
+
 static const char *TAG = "amp_transport";
 static const char *KATANA_MIDI_DEVICE_NAME = "KATANA 3 MIDI";
 static const uint8_t MIDI_CHANNEL = 0;
@@ -253,6 +255,7 @@ static esp_err_t amp_transport_send_ble_midi(
 
     if (!ready) {
         ESP_LOGW(TAG, "BLE-MIDI write skipped because transport is not ready");
+        DIAG_LOGW("ble", "Skipped BLE-MIDI write because the transport is not ready");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -269,6 +272,7 @@ static esp_err_t amp_transport_send_ble_midi(
     const int rc = ble_gattc_write_no_rsp_flat(conn_handle, value_handle, packet, midi_len + 2);
     if (rc != 0) {
         ESP_LOGE(TAG, "BLE-MIDI write failed; rc=%d", rc);
+        DIAG_LOGE("ble", "BLE-MIDI write failed rc=%d", rc);
         return ESP_FAIL;
     }
 
@@ -279,6 +283,7 @@ static esp_err_t amp_transport_send_ble_midi(
 static esp_err_t amp_transport_send_program_change(amp_transport_t *transport, uint8_t program) {
     const uint8_t message[] = { (uint8_t) (0xC0 | MIDI_CHANNEL), program };
     ESP_LOGI(TAG, "Sending Program Change program=%u", program);
+    DIAG_LOGI("ble", "Sending Program Change %u", program);
     return amp_transport_send_ble_midi(transport, message, sizeof(message));
 }
 
@@ -288,6 +293,7 @@ static esp_err_t amp_transport_send_control_change(
     uint8_t value) {
     const uint8_t message[] = { (uint8_t) (0xB0 | MIDI_CHANNEL), controller, value };
     ESP_LOGI(TAG, "Sending Control Change cc=%u value=%u", controller, value);
+    DIAG_LOGI("ble", "Sending Control Change cc=%u value=%u", controller, value);
     return amp_transport_send_ble_midi(transport, message, sizeof(message));
 }
 
@@ -295,12 +301,6 @@ static bool amp_transport_next_effect_state(amp_transport_t *transport, app_effe
     app_state_snapshot_t snapshot;
     app_state_get(transport->state, &snapshot);
     return effect < APP_EFFECT_COUNT ? !snapshot.effects[effect] : false;
-}
-
-static bool amp_transport_next_solo_state(amp_transport_t *transport) {
-    app_state_snapshot_t snapshot;
-    app_state_get(transport->state, &snapshot);
-    return !snapshot.solo_enabled;
 }
 
 static esp_err_t amp_transport_dispatch_preset(
@@ -317,9 +317,26 @@ static esp_err_t amp_transport_dispatch_preset(
     uint8_t program = 0;
     if (!midi_config_get_program_for_preset(&midi_config, preset, &program)) {
         ESP_LOGW(TAG, "Preset dispatch skipped because PC mapping is not calibrated");
+        DIAG_LOGW("midi", "Preset dispatch skipped because PC offset is not calibrated");
         return ESP_ERR_INVALID_STATE;
     }
 
+    return amp_transport_send_program_change(transport, program);
+}
+
+static esp_err_t amp_transport_dispatch_panel(amp_transport_t *transport) {
+    midi_config_snapshot_t midi_config;
+    midi_config_get(transport->midi_config, &midi_config);
+
+    uint8_t program = 0;
+    if (!midi_config_get_program_for_panel(&midi_config, &program)) {
+        ESP_LOGW(TAG, "Panel dispatch skipped because PC mapping is not calibrated");
+        DIAG_LOGW("midi", "Panel dispatch skipped because PC offset is not calibrated");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "Dispatching PANEL Program Change program=%u", program);
+    DIAG_LOGI("midi", "Dispatching PANEL as Program Change %u", program);
     return amp_transport_send_program_change(transport, program);
 }
 
@@ -330,29 +347,13 @@ static esp_err_t amp_transport_dispatch_effect(amp_transport_t *transport, app_e
     uint8_t controller = 0;
     if (!midi_config_get_cc_for_effect(&midi_config, effect, &controller)) {
         ESP_LOGW(TAG, "Effect dispatch skipped because CC mapping is missing");
+        DIAG_LOGW("midi", "Effect dispatch skipped because CC mapping is missing");
         return ESP_ERR_INVALID_STATE;
     }
 
     const bool enabled = amp_transport_next_effect_state(transport, effect);
     ESP_LOGI(TAG, "Dispatching %s toggle as CC%u -> %u", effect_name(effect), controller, enabled);
-    return amp_transport_send_control_change(
-        transport,
-        controller,
-        enabled ? MIDI_SWITCH_ON : MIDI_SWITCH_OFF);
-}
-
-static esp_err_t amp_transport_dispatch_solo(amp_transport_t *transport) {
-    midi_config_snapshot_t midi_config;
-    midi_config_get(transport->midi_config, &midi_config);
-
-    uint8_t controller = 0;
-    if (!midi_config_get_cc_for_solo(&midi_config, &controller)) {
-        ESP_LOGW(TAG, "Solo dispatch skipped because SOLO CC mapping is not configured");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    const bool enabled = amp_transport_next_solo_state(transport);
-    ESP_LOGI(TAG, "Dispatching SOLO toggle as CC%u -> %u", controller, enabled);
+    DIAG_LOGI("midi", "Dispatching %s as CC%u -> %u", effect_name(effect), controller, enabled);
     return amp_transport_send_control_change(
         transport,
         controller,
@@ -372,11 +373,13 @@ static int amp_transport_on_subscribe_complete(
 
     if (!connected) {
         ESP_LOGE(TAG, "CCCD subscribe failed; status=%d", error->status);
+        DIAG_LOGE("ble", "BLE notify subscribe failed status=%d", error->status);
         app_state_set_ble(transport->state, APP_BLE_ERROR);
         return 0;
     }
 
     ESP_LOGI(TAG, "BLE-MIDI notifications enabled on handle=%u", attr != NULL ? attr->handle : 0);
+    DIAG_LOGI("ble", "BLE-MIDI notifications enabled");
     app_state_set_ble(transport->state, APP_BLE_CONNECTED);
     app_state_mark_synced(transport->state, false);
     return 0;
@@ -402,6 +405,7 @@ static int amp_transport_on_descriptor_discovered(
 
     if (error->status != BLE_HS_EDONE) {
         ESP_LOGE(TAG, "Descriptor discovery failed; status=%d", error->status);
+        DIAG_LOGE("ble", "Descriptor discovery failed status=%d", error->status);
         app_state_set_ble(transport->state, APP_BLE_ERROR);
         return 0;
     }
@@ -412,6 +416,7 @@ static int amp_transport_on_descriptor_discovered(
 
     if (cccd_handle == 0) {
         ESP_LOGE(TAG, "BLE-MIDI CCCD not found");
+        DIAG_LOGE("ble", "BLE-MIDI notify descriptor not found");
         app_state_set_ble(transport->state, APP_BLE_ERROR);
         return 0;
     }
@@ -426,6 +431,7 @@ static int amp_transport_on_descriptor_discovered(
         transport);
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to enable BLE-MIDI notifications; rc=%d", rc);
+        DIAG_LOGE("ble", "Failed to enable BLE notifications rc=%d", rc);
         app_state_set_ble(transport->state, APP_BLE_ERROR);
     }
 
@@ -454,6 +460,7 @@ static int amp_transport_on_characteristic_discovered(
 
     if (error->status != BLE_HS_EDONE) {
         ESP_LOGE(TAG, "Characteristic discovery failed; status=%d", error->status);
+        DIAG_LOGE("ble", "Characteristic discovery failed status=%d", error->status);
         app_state_set_ble(transport->state, APP_BLE_ERROR);
         return 0;
     }
@@ -465,6 +472,7 @@ static int amp_transport_on_characteristic_discovered(
 
     if (char_val_handle == 0) {
         ESP_LOGE(TAG, "BLE-MIDI characteristic not found");
+        DIAG_LOGE("ble", "BLE-MIDI characteristic not found");
         app_state_set_ble(transport->state, APP_BLE_ERROR);
         return 0;
     }
@@ -477,6 +485,7 @@ static int amp_transport_on_characteristic_discovered(
         transport);
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to start descriptor discovery; rc=%d", rc);
+        DIAG_LOGE("ble", "Failed to start descriptor discovery rc=%d", rc);
         app_state_set_ble(transport->state, APP_BLE_ERROR);
     }
 
@@ -501,6 +510,7 @@ static int amp_transport_on_service_discovered(
 
     if (error->status != BLE_HS_EDONE) {
         ESP_LOGE(TAG, "Service discovery failed; status=%d", error->status);
+        DIAG_LOGE("ble", "Service discovery failed status=%d", error->status);
         app_state_set_ble(transport->state, APP_BLE_ERROR);
         return 0;
     }
@@ -512,6 +522,7 @@ static int amp_transport_on_service_discovered(
 
     if (start_handle == 0 || end_handle == 0) {
         ESP_LOGE(TAG, "BLE-MIDI service not found on connected peer");
+        DIAG_LOGE("ble", "BLE-MIDI service not found on peer");
         app_state_set_ble(transport->state, APP_BLE_ERROR);
         return 0;
     }
@@ -525,6 +536,7 @@ static int amp_transport_on_service_discovered(
         transport);
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to start characteristic discovery; rc=%d", rc);
+        DIAG_LOGE("ble", "Failed to start characteristic discovery rc=%d", rc);
         app_state_set_ble(transport->state, APP_BLE_ERROR);
     }
 
@@ -546,6 +558,7 @@ static void amp_transport_start_gatt_ready_flow(amp_transport_t *transport, uint
     const int rc = ble_gattc_exchange_mtu(conn_handle, amp_transport_on_mtu_exchanged, transport);
     if (rc != 0) {
         ESP_LOGW(TAG, "MTU exchange start failed; rc=%d, continuing with service discovery", rc);
+        DIAG_LOGW("ble", "MTU exchange start failed rc=%d; continuing", rc);
         amp_transport_on_mtu_exchanged(
             conn_handle,
             &(struct ble_gatt_error){ .status = 0, .att_handle = 0 },
@@ -569,6 +582,7 @@ static int amp_transport_on_mtu_exchanged(
         transport);
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to start BLE-MIDI service discovery; rc=%d", rc);
+        DIAG_LOGE("ble", "Failed to start BLE-MIDI service discovery rc=%d", rc);
         app_state_set_ble(transport->state, APP_BLE_ERROR);
     }
 
@@ -599,6 +613,7 @@ static void amp_transport_start_scan(amp_transport_t *transport) {
 
     app_state_set_ble(transport->state, APP_BLE_SCANNING);
     ESP_LOGI(TAG, "Scanning for BLE MIDI peripheral '%s'", KATANA_MIDI_DEVICE_NAME);
+    DIAG_LOGI("ble", "Scanning for '%s'", KATANA_MIDI_DEVICE_NAME);
 
     const int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &params, amp_transport_gap_event, transport);
     if (rc != 0) {
@@ -606,6 +621,7 @@ static void amp_transport_start_scan(amp_transport_t *transport) {
         transport->scan_active = false;
         amp_transport_unlock(transport);
         ESP_LOGE(TAG, "Failed to start BLE scan; rc=%d", rc);
+        DIAG_LOGE("ble", "Failed to start BLE scan rc=%d", rc);
         app_state_set_ble(transport->state, APP_BLE_ERROR);
     }
 }
@@ -637,10 +653,12 @@ static int amp_transport_gap_event(struct ble_gap_event *event, void *arg) {
             char addr[18];
             format_ble_addr(&event->disc.addr, addr, sizeof(addr));
             ESP_LOGI(TAG, "Found target BLE MIDI peer '%s' at %s", KATANA_MIDI_DEVICE_NAME, addr);
+            DIAG_LOGI("ble", "Found target peer at %s", addr);
 
             const int cancel_rc = ble_gap_disc_cancel();
             if (cancel_rc != 0 && cancel_rc != BLE_HS_EALREADY) {
                 ESP_LOGE(TAG, "Failed to cancel scan before connect; rc=%d", cancel_rc);
+                DIAG_LOGE("ble", "Failed to cancel scan before connect rc=%d", cancel_rc);
                 return 0;
             }
 
@@ -662,6 +680,7 @@ static int amp_transport_gap_event(struct ble_gap_event *event, void *arg) {
                 transport->connect_in_progress = false;
                 amp_transport_unlock(transport);
                 ESP_LOGE(TAG, "Failed to initiate BLE connection; rc=%d", rc);
+                DIAG_LOGE("ble", "Failed to initiate BLE connection rc=%d", rc);
                 amp_transport_restart_scan_if_needed(transport);
             }
             return 0;
@@ -689,6 +708,7 @@ static int amp_transport_gap_event(struct ble_gap_event *event, void *arg) {
 
             if (event->connect.status != 0) {
                 ESP_LOGE(TAG, "BLE connection failed; status=%d", event->connect.status);
+                DIAG_LOGE("ble", "BLE connection failed status=%d", event->connect.status);
                 app_state_set_ble(transport->state, APP_BLE_ERROR);
                 amp_transport_restart_scan_if_needed(transport);
                 return 0;
@@ -699,12 +719,14 @@ static int amp_transport_gap_event(struct ble_gap_event *event, void *arg) {
                 char addr[18];
                 format_ble_addr(&desc.peer_id_addr, addr, sizeof(addr));
                 ESP_LOGI(TAG, "BLE link established with %s", addr);
+                DIAG_LOGI("ble", "BLE link established with %s", addr);
             }
 
             app_state_set_ble(transport->state, APP_BLE_CONNECTING);
             const int rc = ble_gap_security_initiate(event->connect.conn_handle);
             if (rc != 0) {
                 ESP_LOGE(TAG, "Failed to initiate BLE security; rc=%d", rc);
+                DIAG_LOGE("ble", "Failed to initiate BLE security rc=%d", rc);
                 app_state_set_ble(transport->state, APP_BLE_ERROR);
                 return 0;
             }
@@ -712,10 +734,12 @@ static int amp_transport_gap_event(struct ble_gap_event *event, void *arg) {
             transport->security_in_progress = true;
             amp_transport_unlock(transport);
             ESP_LOGI(TAG, "BLE security initiation started");
+            DIAG_LOGI("ble", "BLE security negotiation started");
             return 0;
 
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGW(TAG, "BLE disconnected; reason=%d", event->disconnect.reason);
+            DIAG_LOGW("ble", "BLE disconnected reason=%d", event->disconnect.reason);
             amp_transport_lock(transport);
             transport->connected = false;
             transport->conn_handle = 0;
@@ -746,11 +770,13 @@ static int amp_transport_gap_event(struct ble_gap_event *event, void *arg) {
 
             if (event->enc_change.status != 0) {
                 ESP_LOGE(TAG, "BLE encryption failed; status=%d", event->enc_change.status);
+                DIAG_LOGE("ble", "BLE encryption failed status=%d", event->enc_change.status);
                 app_state_set_ble(transport->state, APP_BLE_ERROR);
                 return 0;
             }
 
             ESP_LOGI(TAG, "BLE link encrypted");
+            DIAG_LOGI("ble", "BLE link encrypted");
             amp_transport_start_gatt_ready_flow(transport, event->enc_change.conn_handle);
             return 0;
 
@@ -760,6 +786,7 @@ static int amp_transport_gap_event(struct ble_gap_event *event, void *arg) {
             if (rc == 0) {
                 ble_store_util_delete_peer(&desc.peer_id_addr);
                 ESP_LOGW(TAG, "Deleted previous bond and retrying BLE pairing");
+                DIAG_LOGW("ble", "Deleted stale bond and retrying pairing");
             }
             return BLE_GAP_REPEAT_PAIRING_RETRY;
         }
@@ -770,6 +797,7 @@ static int amp_transport_gap_event(struct ble_gap_event *event, void *arg) {
                 "BLE pairing complete conn_handle=%u status=%d",
                 event->pairing_complete.conn_handle,
                 event->pairing_complete.status);
+            DIAG_LOGI("ble", "BLE pairing complete status=%d", event->pairing_complete.status);
             return 0;
 
         case BLE_GAP_EVENT_NOTIFY_RX: {
@@ -794,6 +822,7 @@ static int amp_transport_gap_event(struct ble_gap_event *event, void *arg) {
 
         case BLE_GAP_EVENT_MTU:
             ESP_LOGI(TAG, "BLE MTU updated: %u", event->mtu.value);
+            DIAG_LOGI("ble", "BLE MTU updated to %u", event->mtu.value);
             return 0;
 
         default:
@@ -803,6 +832,7 @@ static int amp_transport_gap_event(struct ble_gap_event *event, void *arg) {
 
 static void amp_transport_on_reset(int reason) {
     ESP_LOGW(TAG, "NimBLE reset; reason=%d", reason);
+    DIAG_LOGW("ble", "NimBLE reset reason=%d", reason);
     if (s_transport == NULL) {
         return;
     }
@@ -834,6 +864,7 @@ static void amp_transport_on_sync(void) {
     rc = ble_hs_util_ensure_addr(0);
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to ensure BLE address; rc=%d", rc);
+        DIAG_LOGE("ble", "Failed to ensure BLE address rc=%d", rc);
         app_state_set_ble(s_transport->state, APP_BLE_ERROR);
         return;
     }
@@ -841,6 +872,7 @@ static void amp_transport_on_sync(void) {
     rc = ble_hs_id_infer_auto(0, &s_transport->own_addr_type);
     if (rc != 0) {
         ESP_LOGE(TAG, "Failed to infer own BLE address type; rc=%d", rc);
+        DIAG_LOGE("ble", "Failed to infer BLE address type rc=%d", rc);
         app_state_set_ble(s_transport->state, APP_BLE_ERROR);
         return;
     }
@@ -850,6 +882,7 @@ static void amp_transport_on_sync(void) {
     amp_transport_unlock(s_transport);
 
     ESP_LOGI(TAG, "NimBLE host synced; addr_type=%u", s_transport->own_addr_type);
+    DIAG_LOGI("ble", "NimBLE host synced");
     amp_transport_start_scan(s_transport);
 }
 
@@ -884,6 +917,7 @@ esp_err_t amp_transport_init(amp_transport_t *transport, const amp_transport_con
     nimble_port_freertos_init(amp_transport_host_task);
 
     ESP_LOGI(TAG, "Amp transport initialized in Gen 3 MIDI-only mode");
+    DIAG_LOGI("ble", "Initialized Gen 3 MIDI-only BLE transport");
     return ESP_OK;
 }
 
@@ -924,6 +958,7 @@ esp_err_t amp_transport_disconnect(amp_transport_t *transport) {
     }
 
     ESP_LOGI(TAG, "BLE transport disconnect requested");
+    DIAG_LOGW("ble", "BLE transport disconnect requested");
     return ESP_OK;
 }
 
@@ -932,7 +967,7 @@ bool amp_transport_should_apply_optimistic_action(const amp_transport_t *transpo
 
     switch (action->type) {
         case APP_ACTION_PRESET_SELECT:
-        case APP_ACTION_SOLO_TOGGLE:
+        case APP_ACTION_PANEL_SELECT:
         case APP_ACTION_MODE_SET:
         case APP_ACTION_EFFECT_TOGGLE:
         case APP_ACTION_BLE_RECONNECT:
@@ -949,6 +984,7 @@ esp_err_t amp_transport_dispatch_action(amp_transport_t *transport, const app_ac
     switch (action->type) {
         case APP_ACTION_BLE_RECONNECT:
             ESP_LOGI(TAG, "Manual BLE reconnect requested");
+            DIAG_LOGW("ble", "Manual BLE reconnect requested");
             return amp_transport_connect(transport);
         case APP_ACTION_WIFI_RESET:
             return ESP_OK;
@@ -957,13 +993,17 @@ esp_err_t amp_transport_dispatch_action(amp_transport_t *transport, const app_ac
                 TAG,
                 "Local footswitch mode changed to %s",
                 action->value.mode == APP_FOOTSWITCH_MODE_PRESET ? "preset" : "effect");
+            DIAG_LOGI(
+                "action",
+                "Changed local mode to %s",
+                action->value.mode == APP_FOOTSWITCH_MODE_PRESET ? "preset" : "effect");
             return ESP_OK;
         case APP_ACTION_RESYNC:
             return amp_transport_resync(transport);
         case APP_ACTION_PRESET_SELECT:
             return amp_transport_dispatch_preset(transport, action->value.preset, APP_PC_OFFSET_UNKNOWN, false);
-        case APP_ACTION_SOLO_TOGGLE:
-            return amp_transport_dispatch_solo(transport);
+        case APP_ACTION_PANEL_SELECT:
+            return amp_transport_dispatch_panel(transport);
         case APP_ACTION_EFFECT_TOGGLE:
             return amp_transport_dispatch_effect(transport, action->value.effect);
     }
@@ -974,6 +1014,7 @@ esp_err_t amp_transport_dispatch_action(amp_transport_t *transport, const app_ac
 esp_err_t amp_transport_resync(amp_transport_t *transport) {
     (void) transport;
     ESP_LOGI(TAG, "Resync requested, but Gen 3 state feedback is intentionally disabled in default runtime");
+    DIAG_LOGI("midi", "Resync requested; amp feedback remains intentionally disabled");
     app_state_mark_synced(transport->state, false);
     return ESP_OK;
 }
@@ -991,5 +1032,6 @@ esp_err_t amp_transport_run_pc_offset_test(
         "Running PC offset calibration test for preset=%d mode=%d",
         preset,
         pc_offset_mode);
+    DIAG_LOGI("midi", "Running PC offset test for preset=%d mode=%d", preset, pc_offset_mode);
     return amp_transport_dispatch_preset(transport, preset, pc_offset_mode, true);
 }

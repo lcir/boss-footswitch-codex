@@ -4,10 +4,10 @@ idf_component_register(
         "app_state.c"
         "amp_transport.c"
         "buttons.c"
+        "diag_log.c"
         "leds.c"
         "midi_config.c"
         "web_server.c"
-        "web_ui.c"
         "wifi_manager.c"
     INCLUDE_DIRS "."
     REQUIRES
@@ -15,11 +15,13 @@ idf_component_register(
         esp_event
         esp_http_server
         esp_netif
+        esp_partition
         esp_timer
         esp_wifi
         freertos
         json
         lwip
         nvs_flash
+        spiffs
         bt
 )
